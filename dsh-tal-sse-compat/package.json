@@ -1,0 +1,10 @@
+{
+  "name": "dsh-tal-sse-compat",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local TAL Messages SSE final blank-line compatibility",
+  "type": "module",
+  "main": "index.js",
+  "exports": { ".": "./index.js", "./package.json": "./package.json" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

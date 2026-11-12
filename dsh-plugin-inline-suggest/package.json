@@ -1,0 +1,20 @@
+{
+  "name": "dsh-plugin-inline-suggest",
+  "version": "0.2.1",
+  "private": true,
+  "description": "Inline ghost-text autocomplete for the DSH composer: grey prediction after the caret, Tab to accept",
+  "type": "module",
+  "main": "lib/index.js",
+  "scripts": {
+    "test": "node test/smoke.mjs"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "platform": "web" }
+  }
+}

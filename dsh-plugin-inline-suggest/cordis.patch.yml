@@ -1,0 +1,3 @@
+- insert:
+    - id: inline-suggest
+      name: dsh-plugin-inline-suggest
