@@ -6,7 +6,7 @@
 
 | 插件 | 作用 |
 |---|---|
-| [dsh-plugin-inline-suggest](./dsh-plugin-inline-suggest) | 输入框上下文预测：一轮回答结束后，在**空输入框**里用灰色显示"你下一句最可能说什么"，按 <kbd>Tab</kbd> 接受；输入过程中则做本地前缀补全 |
+| [dsh-plugin-inline-suggest](./dsh-plugin-inline-suggest) | 输入框上下文预测：一轮回答结束后，在**空输入框**里用灰色显示"你下一句最可能说什么"，按 <kbd>Tab</kbd> 接受。只在输入框为空时工作，不做打字前缀补全 |
 | [dsh-tal-sse-compat](./dsh-tal-sse-compat) | TAL Messages SSE 兼容层：流末尾缺少空行导致终端事件被 SSE 解析器丢弃时，补上分隔符，避免回答被截断/卡住 |
 
 ## 安装

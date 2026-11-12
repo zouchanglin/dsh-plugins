@@ -314,6 +314,21 @@ check('灰字已显示', Boolean(ghost) && ghost.style.display === 'block', ghos
 check('灰字出现时隐藏 placeholder', placeholder.style.visibility === 'hidden', JSON.stringify(placeholder.style));
 check('调试状态 visible', api.state.visible === true, JSON.stringify(api.state));
 
+/* 2b) 输入框一旦有内容，这个插件不再画任何灰字（没有打字前缀补全） */
+editor.innerText = '帮我';
+editor.textContent = '帮我';
+api.refresh();
+flush(40);
+check('输入框有内容时不画灰字', api.state.visible === false, JSON.stringify(api.state));
+check('输入框有内容时恢复 placeholder', placeholder.style.visibility === '', JSON.stringify(placeholder.style));
+
+/* 2c) 清空后又回到上下文的建议 */
+editor.innerText = '';
+editor.textContent = '';
+api.refresh();
+flush(40);
+check('清空输入框后重新显示上下文建议', api.state.visible === true, JSON.stringify(api.state));
+
 /* 3) Tab 接受：只写入一次（Lexical 的插入是异步落地的） */
 const accepted = api.accept();
 check('接受建议返回 true', accepted === true);

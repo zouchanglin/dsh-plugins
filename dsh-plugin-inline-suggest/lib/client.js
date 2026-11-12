@@ -1,22 +1,25 @@
 /**
- * Inline ghost-text suggestions for the DSH composer.
+ * Context-aware ghost-text suggestions for the DSH composer.
  *
  * Behaviour
- *  - While you type in the composer, a grey continuation of what you are typing
- *    is painted immediately after the caret.
+ *  - After a turn has settled, an EMPTY composer shows a grey guess of the
+ *    message the user is most likely to type next, derived from the visible
+ *    conversation by the Host half.
  *  - Tab accepts it: the grey text becomes ordinary draft text at the normal
  *    text colour.
- *  - Escape dismisses the current suggestion until the draft changes again.
+ *  - Escape dismisses it until the conversation moves on.
+ *  - As soon as the composer holds a draft, this plugin paints nothing; it is
+ *    not a typed-prefix autocomplete.
  *
  * Why a DOM overlay instead of a slot: the composer is a Lexical contenteditable
  * owned by ui-conversation, and no slot renders inside its text flow. This
- * plugin therefore measures the caret with a collapsed Range and paints an
- * absolutely positioned overlay on top of it, which keeps it independent of the
- * editor implementation and of ui-conversation internals.
+ * plugin therefore measures the caret with a collapsed Range and paints a fixed
+ * positioned overlay on top of it, which keeps it independent of the editor
+ * implementation and of ui-conversation internals.
  *
- * Prediction is local: the plugin learns the prompts you actually send (per
- * browser profile) and completes them by prefix plus a small built-in seed
- * corpus. No network calls, nothing leaves the machine.
+ * Prediction is contextual: only the conversation tail leaves the browser, and
+ * only through the Host half (`/inline-suggest/predict`), which calls the LLM
+ * provider configured in DSH.
  */
 
 window.__ModuleLoader__.load({
@@ -26,37 +29,16 @@ window.__ModuleLoader__.load({
 		var exports = module.exports;
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 
-		const LS_HISTORY = "dsh.inline-suggest.history.v1";
 		const LS_ENABLED = "dsh.inline-suggest.enabled";
-		const LS_CONTEXT = "dsh.inline-suggest.context";
 		const CONTEXT_ENDPOINT = "/inline-suggest/predict";
-		const MAX_HISTORY = 240;
-		const MIN_DRAFT = 2;
-		const MAX_SUGGEST = 40;
-		const MIN_LEARN = 6;
 		const EDITOR_SELECTOR = '[data-lexical-editor="true"]';
 
 		/** Which branch the update loop last took; surfaced through the Host status route. */
 		let branch = "";
 		let fetchNote = "none";
 
-		/** Seed corpus so suggestions exist before any prompt has been sent. */
-		const SEED = [
-			"帮我写一个", "帮我实现一个", "帮我看看这段代码", "帮我看一下这个报错",
-			"帮我优化一下", "帮我解释一下", "帮我检查一下", "帮我生成一个",
-			"帮我把这段代码重构一下", "帮我把这个改成", "帮我列出", "帮我总结一下",
-			"总结一下上面的内容", "继续上面的工作", "用 TypeScript 重写一下",
-			"解释一下这段代码的作用", "这个报错是什么原因", "怎么解决这个问题",
-			"现在给我", "然后帮我", "顺便检查一下",
-			"please help me", "can you explain", "write a function that",
-			"let me know if", "I want to"
-		];
-
-		let history = [];
 		let enabled = true;
 		let composing = false;
-		let dismissedFor = "";
-		let prevDraft = "";
 		let ghost = null;
 		let state = { visible: false, text: "", editor: null };
 		let scheduled = false;
@@ -74,92 +56,12 @@ window.__ModuleLoader__.load({
 		/* storage                                                             */
 		/* ------------------------------------------------------------------ */
 
-		function loadHistory() {
-			try {
-				const raw = window.localStorage.getItem(LS_HISTORY);
-				const list = raw ? JSON.parse(raw) : [];
-				return Array.isArray(list) ? list.filter((x) => typeof x === "string" && x) : [];
-			} catch {
-				return [];
-			}
-		}
-
-		function saveHistory() {
-			try {
-				window.localStorage.setItem(LS_HISTORY, JSON.stringify(history.slice(0, MAX_HISTORY)));
-			} catch {
-				/* storage disabled: suggestions still work in-memory */
-			}
-		}
-
 		function loadEnabled() {
 			try {
 				return window.localStorage.getItem(LS_ENABLED) !== "0";
 			} catch {
 				return true;
 			}
-		}
-
-		function remember(text) {
-			const clean = String(text || "").trim();
-			if (clean.length < MIN_LEARN) return;
-			if (history[0] === clean) return;
-			history = [clean, ...history.filter((x) => x !== clean)].slice(0, MAX_HISTORY);
-			saveHistory();
-		}
-
-		/* ------------------------------------------------------------------ */
-		/* prediction                                                          */
-		/* ------------------------------------------------------------------ */
-
-		function corpus() {
-			const set = new Set(history);
-			for (const seed of SEED) set.add(seed);
-			return [...set];
-		}
-
-		function predict(draft) {
-			const d = String(draft || "").trimEnd();
-			if (!d) return "";
-
-			const lines = corpus();
-
-			// 1) the draft is the beginning of a known prompt: complete the rest.
-			//    Prefer the shortest continuation: it is the least intrusive guess
-			//    and leaves the longer variants reachable by typing more.
-			let best = "";
-			for (const line of lines) {
-				if (line.length <= d.length || !line.startsWith(d)) continue;
-				const rest = line.slice(d.length);
-				if (!best || rest.length < best.length) best = rest;
-			}
-			if (best) return clip(best);
-
-			// 2) the draft ends in a half-typed latin word: finish the word.
-			const word = d.match(/([A-Za-z][A-Za-z0-9_-]{1,39})$/);
-			if (word) {
-				const partial = word[1].toLowerCase();
-				const votes = new Map();
-				for (const line of lines) {
-					for (const token of line.match(/[A-Za-z][A-Za-z0-9_-]{2,39}/g) || []) {
-						const lower = token.toLowerCase();
-						if (lower.length > partial.length && lower.startsWith(partial)) {
-							votes.set(token, (votes.get(token) || 0) + 1);
-						}
-					}
-				}
-				if (votes.size) {
-					const ranked = [...votes.entries()].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length);
-					return clip(ranked[0][0].slice(word[1].length));
-				}
-			}
-
-			return "";
-		}
-
-		function clip(text) {
-			if (!text) return "";
-			return text.length > MAX_SUGGEST ? text.slice(0, MAX_SUGGEST) : text;
 		}
 
 		/* ------------------------------------------------------------------ */
@@ -200,18 +102,6 @@ window.__ModuleLoader__.load({
 			}
 			if (typeof text !== "string" || text === "") text = editor.textContent || "";
 			return String(text).replace(/\u200b/g, "").replace(/\r/g, "");
-		}
-
-		function caretAtEnd(editor, range) {
-			try {
-				const probe = document.createRange();
-				probe.selectNodeContents(editor);
-				probe.setStart(range.startContainer, range.startOffset);
-				const tail = probe.toString().replace(/[\s\u00a0\u200b]+/g, "");
-				return tail.length === 0;
-			} catch {
-				return false;
-			}
 		}
 
 		function caretRect(editor) {
@@ -371,7 +261,6 @@ window.__ModuleLoader__.load({
 					tag,
 					at: new Date().toISOString(),
 					enabled,
-					contextEnabled: contextEnabled(),
 					editors: editors.length,
 					rows: rows.length,
 					kinds,
@@ -443,14 +332,6 @@ window.__ModuleLoader__.load({
 			return value;
 		}
 
-		function contextEnabled() {
-			try {
-				return window.localStorage.getItem(LS_CONTEXT) !== "0";
-			} catch {
-				return true;
-			}
-		}
-
 		async function requestContext(context, key) {
 			if (ctxInFlight) return;
 			ctxInFlight = true;
@@ -520,8 +401,6 @@ window.__ModuleLoader__.load({
 			}
 
 			const text = draftOf(editor);
-			if (prevDraft.trim().length >= MIN_LEARN && text.trim() === "") remember(prevDraft);
-			prevDraft = text;
 
 			if (composing || !isVisible(editor)) {
 				branch = "invisible";
@@ -541,11 +420,6 @@ window.__ModuleLoader__.load({
 			if (!draft) {
 				if (Date.now() < acceptSettlingUntil) {
 					branch = "accept-settling";
-					hide();
-					return;
-				}
-				if (!contextEnabled()) {
-					branch = "context-off";
 					hide();
 					return;
 				}
@@ -600,43 +474,9 @@ window.__ModuleLoader__.load({
 				return;
 			}
 
-			// ---- draft in progress: complete from the local corpus
-			const sel = window.getSelection();
-			if (!sel || sel.rangeCount === 0) {
-				branch = "no-selection";
-				hide();
-				return;
-			}
-			const range = sel.getRangeAt(0);
-			if (!range.collapsed || !editor.contains(range.startContainer)) {
-				branch = "caret-away";
-				hide();
-				return;
-			}
-			if (draft.length < MIN_DRAFT || draft.startsWith("/")) {
-				branch = "draft-short";
-				hide();
-				return;
-			}
-			if (dismissedFor === draft) {
-				branch = "dismissed";
-				hide();
-				return;
-			}
-			if (!caretAtEnd(editor, range)) {
-				branch = "caret-not-end";
-				hide();
-				return;
-			}
-
-			const suggestion = predict(draft);
-			if (!suggestion) {
-				branch = "draft-no-match";
-				hide();
-				return;
-			}
-			branch = "draft-local";
-			show(suggestion, editor);
+			// ---- draft in progress: this plugin never paints into typed text
+			branch = "has-draft";
+			hide();
 		}
 
 		/* ------------------------------------------------------------------ */
@@ -705,7 +545,6 @@ window.__ModuleLoader__.load({
 				}
 			}, ok ? 200 : 0);
 
-			prevDraft = draftOf(editor);
 			schedule();
 			return true;
 		}
@@ -717,13 +556,8 @@ window.__ModuleLoader__.load({
 		function onKeyDown(event) {
 			if (!state.visible) return;
 			if (event.key === "Escape") {
-				const editor = state.editor;
-				const draft = editor ? draftOf(editor).trim() : "";
-				if (draft) dismissedFor = draft;
-				else {
-					// Context guess dismissed: keep it away until the chat moves on.
-					ctxState = { key: ctxState.key, text: "", asked: true };
-				}
+				// Context guess dismissed: keep it away until the chat moves on.
+				ctxState = { key: ctxState.key, text: "", asked: true };
 				hide();
 				return;
 			}
@@ -744,7 +578,6 @@ window.__ModuleLoader__.load({
 		}
 
 		function onFocusOrInput() {
-			dismissedFor = "";
 			schedule();
 		}
 
@@ -790,22 +623,20 @@ window.__ModuleLoader__.load({
 			pollTimer = window.setInterval(schedule, 1200);
 			window.setTimeout(() => reportDebug("install"), 900);
 			try {
-				console.info("[inline-suggest] ready — type in the composer, Tab accepts the grey suggestion");
+				console.info("[inline-suggest] ready — an empty composer shows the predicted next message; Tab accepts it");
 			} catch {
 				/* ignore */
 			}
 			window.__DSH_INLINE_SUGGEST__ = {
-				version: "0.2.0",
+				version: "0.3.0",
 				get state() {
 					return {
 						enabled,
 						visible: state.visible,
 						text: state.text,
-						learned: history.length,
 						context: { key: ctxState.key, suggestion: ctxState.text, asked: ctxState.asked }
 					};
 				},
-				predict,
 				readConversation,
 				refresh: schedule,
 				accept,
@@ -818,20 +649,6 @@ window.__ModuleLoader__.load({
 					}
 					if (!enabled) hide();
 					else schedule();
-				},
-				forget() {
-					history = [];
-					saveHistory();
-				},
-				setContextEnabled(next) {
-					try {
-						window.localStorage.setItem(LS_CONTEXT, next ? "1" : "0");
-					} catch {
-						/* ignore */
-					}
-					ctxState = { key: "", text: "", asked: false };
-					hide();
-					schedule();
 				}
 			};
 			window.__DSH_INLINE_SUGGEST_DISPOSE__ = uninstall;
@@ -869,7 +686,6 @@ window.__ModuleLoader__.load({
 
 		function apply(ctx) {
 			try {
-				history = loadHistory();
 				enabled = loadEnabled();
 			} catch {
 				/* ignore */

@@ -2,20 +2,17 @@
 
 给 DSH 输入框加**上下文预测**：一轮回答结束后，空输入框里直接以灰色显示"你下一句最可能说什么"，按 <kbd>Tab</kbd> 接受，灰字变成正常输入。
 
-## 两种模式
+## 触发条件
 
-| 场景 | 预测来源 | 例子 |
-|---|---|---|
-| **输入框为空**（主模式） | 模型读对话尾部上下文 | 助手说"你吃饭了吗？" → 灰字 `还没吃，你呢？` |
-| **输入框已有内容** | 本地语料前缀补全（零延迟、零请求） | 输入 `帮我` → 灰字 `列出` |
+只在「**输入框为空** + 最后一条消息是助手的正式回答 + 该轮已结束」时预测；助手还在流式输出时不会请求，避免抖动和浪费。同一段上下文只请求一次（按上下文哈希缓存）。
 
-上下文预测只在「最后一条消息是助手的正式回答、且该轮已结束」时触发；助手还在流式输出时不会请求，避免抖动和浪费。同一段上下文只请求一次（按上下文哈希缓存）。
+**输入框已有内容时不留任何灰字**：这个插件不做普通输入法那种"打字前缀补全"，只有空输入框才有建议。
 
 ## 交互
 
 - <kbd>Tab</kbd> — 接受建议（灰字变正常文字并进入光标位置）
-- <kbd>Esc</kbd> — 忽略当前建议，直到草稿变化
-- 继续打字 — 灰字让位给本地补全
+- <kbd>Esc</kbd> — 忽略当前建议，直到对话继续
+- 开始打字 — 灰字立即消失，输入过程中不再出现
 
 空输入框原本会显示 placeholder（"发消息或创建任务…"）。灰字占的就是这块位置，所以**画灰字时会把 placeholder 临时隐藏**，接受/消失后恢复，避免两行灰字叠在一起。
 
@@ -78,10 +75,9 @@
 浏览器控制台：
 
 ```js
-__DSH_INLINE_SUGGEST__.state               // enabled/visible/text/learned/context
+__DSH_INLINE_SUGGEST__.state               // enabled / visible / text / context
 __DSH_INLINE_SUGGEST__.readConversation()  // 实际抓到的上下文与最后一条消息类型
-__DSH_INLINE_SUGGEST__.predict('帮我')      // 本地补全
-__DSH_INLINE_SUGGEST__.setContextEnabled(false) // 关掉上下文预测，只留本地补全
+__DSH_INLINE_SUGGEST__.refresh()           // 立即重算一次
 __DSH_INLINE_SUGGEST__.setEnabled(false)   // 整个插件临时关闭
 ```
 
@@ -97,12 +93,12 @@ irm "http://127.0.0.1:<port>/inline-suggest/predict" -Method Post `
 `/status` 里的 `debug.branch` 是更新循环上一轮走到的分支，能直接定位"为什么没有灰字"：
 `requesting`（已发请求）→ `showing`（已画出）是正常链路；
 `ctx:<kind>`（上下文不可用）、`running`（还在生成）、`focus`（焦点不在输入框）、
-`accept-settling`（刚按过 Tab，等编辑器落地）、`fetch-failed:*`（请求失败）则是被拦下的原因。
+`has-draft`（输入框里有内容，本插件不参与）、`accept-settling`（刚按过 Tab，等编辑器落地）、
+`fetch-failed:*`（请求失败）则是被拦下的原因。
 
 ## 配置点
 
 `lib/index.js` 顶部：`CANDIDATES`（模型候选）、`SYSTEM_PROMPT`（预测规则）、`CALL_TIMEOUT_MS`。
-`lib/client.js` 顶部：`MIN_DRAFT`（本地补全最少字符）、`MAX_SUGGEST`。
 
 ## 测试
 
